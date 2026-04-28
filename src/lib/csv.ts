@@ -1,12 +1,16 @@
 import Papa from "papaparse";
 import type { ApplicationCodeRow, EvaluationRecord, RawTelemetryRow } from "./types";
 
+function stripBom(h: string): string {
+  return h.replace(/^﻿/, "").trim();
+}
+
 export async function loadApplicationCodes(url: string): Promise<ApplicationCodeRow[]> {
   const text = await (await fetch(url)).text();
   const parsed = Papa.parse<ApplicationCodeRow>(text, {
     header: true,
     skipEmptyLines: true,
-    transformHeader: (h) => h.trim()
+    transformHeader: stripBom
   });
   return (parsed.data ?? []).filter(
     (r) => r && (r["Masked Code"] ?? "").trim().length > 0
@@ -17,7 +21,8 @@ export async function loadTelemetry(url: string): Promise<RawTelemetryRow[]> {
   const text = await (await fetch(url)).text();
   const parsed = Papa.parse<RawTelemetryRow>(text, {
     header: true,
-    skipEmptyLines: true
+    skipEmptyLines: true,
+    transformHeader: stripBom
   });
   return (parsed.data ?? []).filter((r) => r && Object.keys(r).length > 0);
 }

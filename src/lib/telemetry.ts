@@ -1,9 +1,25 @@
-import { normaliseHeader } from "./parsing";
+import { normaliseHeader, parseTelemetryTimestamp } from "./parsing";
 import type { BoothMetrics, RawTelemetryRow, TelemetryRow } from "./types";
 
 export interface RewriteOptions {
   anchorIso?: string;
   intervalMs?: number;
+}
+
+export function parseTelemetryRows(rows: RawTelemetryRow[]): TelemetryRow[] {
+  return rows.map((raw) => {
+    const tsRaw = ((raw["timestamp"] ?? raw["﻿timestamp"]) as string | undefined) ?? "";
+    const parsed = parseTelemetryTimestamp(tsRaw);
+    const values: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      values[normaliseHeader(k)] = (v ?? "").toString().trim();
+    }
+    return {
+      original_timestamp: tsRaw,
+      effective_timestamp_iso: parsed ? parsed.toISOString() : new Date().toISOString(),
+      values
+    };
+  });
 }
 
 export function rewriteTelemetryTimestamps(

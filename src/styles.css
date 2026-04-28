@@ -266,3 +266,79 @@ textarea { min-height: 140px; resize: vertical; }
 .kv-row:last-child { border-bottom: none; }
 .kv-row .k { color: var(--muted); }
 .kv-row .v { font-weight: 600; }
+
+/* ── Taxonomy panel ── */
+.taxo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.taxo-body {
+  margin-top: 12px;
+}
+
+.taxo-search {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.taxo-family {
+  margin-bottom: 10px;
+}
+
+.taxo-family-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.taxo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.taxo-chip {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid currentColor;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+button.taxo-chip:hover {
+  background: rgba(255,255,255,0.07);
+}
+
+.taxo-chip.detected {
+  background: rgba(255,255,255,0.05);
+}
+
+/* ── Detected descriptor bar ── */
+.detected-descriptors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.detected-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}

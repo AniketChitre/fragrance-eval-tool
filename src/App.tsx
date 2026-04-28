@@ -7,11 +7,18 @@ import {
 import {
   extractBoothMetrics,
   findNearestTelemetryRow,
-  rewriteTelemetryTimestamps
+  parseTelemetryRows
 } from "./lib/telemetry";
 import { summariseProtocol } from "./lib/protocol";
 import { loadApplicationCodes, loadTelemetry, recordsToCsv } from "./lib/csv";
 import { getSpeechRecognition, type SpeechRecognitionLike } from "./lib/speech";
+import {
+  GRAND_FAMILIES,
+  SENSATIONS,
+  buildTermIndex,
+  detectDescriptors,
+  type DetectedTerm
+} from "./lib/taxonomy";
 import type {
   ApplicationCodeRow,
   BoothMetrics,
@@ -21,7 +28,9 @@ import type {
 
 const RECORDS_KEY = "frag.records.v1";
 const SUMMARY_KEY = "frag.protocol.summary.v1";
-const TELEMETRY_ANCHOR_KEY = "frag.telemetry.anchor.v1";
+const BASE = import.meta.env.BASE_URL;
+
+const TERM_INDEX = buildTermIndex();
 
 function formatNumber(n: number | null, digits = 2): string {
   if (n === null || isNaN(n)) return "—";
@@ -59,10 +68,14 @@ export default function App() {
   const [boothNumber, setBoothNumber] = useState<number | "">("");
   const [maskedCode, setMaskedCode] = useState<string>("");
   const [notes, setNotes] = useState("");
+  const notesRef = useRef<HTMLTextAreaElement>(null);
 
   const [records, setRecords] = useState<EvaluationRecord[]>(() => loadRecords());
   const [status, setStatus] = useState<{ kind: "info" | "ok" | "error"; msg: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [taxoSearch, setTaxoSearch] = useState("");
+  const [taxoOpen, setTaxoOpen] = useState(false);
 
   // Initial data load
   useEffect(() => {
@@ -70,9 +83,9 @@ export default function App() {
     (async () => {
       try {
         const [codesRows, telemetryRaw, protoRes] = await Promise.all([
-          loadApplicationCodes("/data/application_codes.csv"),
-          loadTelemetry("/data/booth_conditions.csv"),
-          fetch("/protocol.txt").then((r) => r.text())
+          loadApplicationCodes(`${BASE}data/application_codes.csv`),
+          loadTelemetry(`${BASE}data/booth_conditions.csv`),
+          fetch(`${BASE}protocol.txt`).then((r) => r.text())
         ]);
         if (cancelled) return;
         setCodes(codesRows);
@@ -83,35 +96,7 @@ export default function App() {
           setDraftSummary(generated);
           localStorage.setItem(SUMMARY_KEY, generated);
         }
-        // Anchor telemetry timestamps to a stable reference: earliest existing
-        // record, or now-N minutes if no records yet. Persist anchor so the
-        // alignment remains stable across reloads.
-        const existing = loadRecords();
-        let anchorIso = localStorage.getItem(TELEMETRY_ANCHOR_KEY);
-        if (!anchorIso) {
-          if (existing.length > 0) {
-            const earliest = existing.reduce<string>(
-              (acc, r) =>
-                acc === "" || r.evaluation_timestamp_iso < acc
-                  ? r.evaluation_timestamp_iso
-                  : acc,
-              ""
-            );
-            anchorIso =
-              earliest ||
-              new Date(Date.now() - telemetryRaw.length * 60_000).toISOString();
-          } else {
-            anchorIso = new Date(
-              Date.now() - telemetryRaw.length * 60_000
-            ).toISOString();
-          }
-          localStorage.setItem(TELEMETRY_ANCHOR_KEY, anchorIso);
-        }
-        const rewritten = rewriteTelemetryTimestamps(telemetryRaw, {
-          anchorIso,
-          intervalMs: 60_000
-        });
-        setTelemetry(rewritten);
+        setTelemetry(parseTelemetryRows(telemetryRaw));
       } catch (e) {
         if (!cancelled) {
           setLoadError(
@@ -120,9 +105,7 @@ export default function App() {
         }
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -136,7 +119,6 @@ export default function App() {
     if (c) setMaskedCode(c);
   }, [transcript, interim]);
 
-  // Resolved IDs and live booth metrics derived from current input
   const resolved = useMemo(
     () => resolveMaskedCode(maskedCode, codes),
     [maskedCode, codes]
@@ -151,6 +133,31 @@ export default function App() {
     if (!previewTelemetryRow || boothNumber === "") return null;
     return extractBoothMetrics(previewTelemetryRow, Number(boothNumber));
   }, [previewTelemetryRow, boothNumber]);
+
+  // Live detected descriptors from current notes
+  const detectedDescriptors: DetectedTerm[] = useMemo(
+    () => detectDescriptors(notes, TERM_INDEX),
+    [notes]
+  );
+
+  // Descriptor usage summary across all saved records
+  const usageSummary: Map<string, number> = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const rec of records) {
+      for (const d of detectDescriptors(rec.notes, TERM_INDEX)) {
+        counts.set(d.term, (counts.get(d.term) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [records]);
+
+  function appendDescriptor(label: string) {
+    setNotes((prev) => {
+      const trimmed = prev.trimEnd();
+      return trimmed ? `${trimmed}, ${label}` : label;
+    });
+    notesRef.current?.focus();
+  }
 
   function startListening() {
     const Ctor = getSpeechRecognition();
@@ -177,10 +184,7 @@ export default function App() {
         if (finalText) setTranscript((prev) => (prev + " " + finalText).trim());
         setInterim(interimText);
       };
-      rec.onend = () => {
-        setListening(false);
-        setInterim("");
-      };
+      rec.onend = () => { setListening(false); setInterim(""); };
       rec.onerror = (ev) => {
         setListening(false);
         setStatus({ kind: "error", msg: `Voice error: ${ev.error}` });
@@ -242,7 +246,7 @@ export default function App() {
     saveRecords(next);
     setStatus({
       kind: "ok",
-      msg: `Saved booth ${record.booth_number} / ${record.masked_code} -> ${record.project_id} / ${record.application_id}.`
+      msg: `Saved booth ${record.booth_number} / ${record.masked_code} → ${record.project_id} / ${record.application_id}.`
     });
     setNotes("");
     setMaskedCode("");
@@ -292,6 +296,19 @@ export default function App() {
 
   const speechSupported = !!getSpeechRecognition();
   const recentRecords = records.slice(0, 5);
+
+  // Filtered taxonomy terms for the descriptor panel
+  const taxoFilter = taxoSearch.toLowerCase().trim();
+  const filteredFamilies = GRAND_FAMILIES.map((gf) => ({
+    ...gf,
+    subfamilies: gf.subfamilies.filter(
+      (sf) => !taxoFilter || sf.toLowerCase().includes(taxoFilter) || gf.name.toLowerCase().includes(taxoFilter)
+    )
+  })).filter((gf) => gf.subfamilies.length > 0 || gf.name.toLowerCase().includes(taxoFilter));
+
+  const filteredSensations = SENSATIONS.filter(
+    (s) => !taxoFilter || s.toLowerCase().includes(taxoFilter)
+  );
 
   return (
     <div className="app">
@@ -354,9 +371,7 @@ export default function App() {
             >
               <option value="">Select</option>
               {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
+                <option key={n} value={n}>{n}</option>
               ))}
             </select>
           </div>
@@ -369,7 +384,7 @@ export default function App() {
               onChange={(e) =>
                 setMaskedCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))
               }
-              placeholder="e.g. ASDF"
+              placeholder="e.g. FABC"
               autoCapitalize="characters"
               autoCorrect="off"
               spellCheck={false}
@@ -409,8 +424,7 @@ export default function App() {
         ) : (
           <>
             <div className="timestamp-label">
-              Conditions snapshot (aligned):{" "}
-              {previewTelemetryRow.effective_timestamp_iso}
+              Telemetry snapshot: {previewTelemetryRow.original_timestamp || previewTelemetryRow.effective_timestamp_iso}
             </div>
             <div className="metric-grid">
               <Metric label="Temperature" value={formatNumber(previewMetrics?.booth_temperature_c ?? null)} unit="°C" />
@@ -433,51 +447,98 @@ export default function App() {
               onChange={(e) => setDraftSummary(e.target.value)}
             />
             <div className="actions" style={{ marginTop: 10 }}>
-              <button className="btn primary" onClick={handleSaveSummary}>
-                Save summary
-              </button>
-              <button
-                className="btn"
-                onClick={() => {
-                  setDraftSummary(summary);
-                  setEditingSummary(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button className="btn" onClick={handleResetSummary}>
-                Reset from source
-              </button>
+              <button className="btn primary" onClick={handleSaveSummary}>Save summary</button>
+              <button className="btn" onClick={() => { setDraftSummary(summary); setEditingSummary(false); }}>Cancel</button>
+              <button className="btn" onClick={handleResetSummary}>Reset from source</button>
             </div>
           </>
         ) : (
           <>
             <div className="protocol">{summary || "No summary yet."}</div>
             <div className="actions" style={{ marginTop: 10 }}>
-              <button
-                className="btn"
-                onClick={() => {
-                  setDraftSummary(summary);
-                  setEditingSummary(true);
-                }}
-              >
-                Edit
-              </button>
-              <button className="btn" onClick={handleResetSummary}>
-                Reset from source
-              </button>
+              <button className="btn" onClick={() => { setDraftSummary(summary); setEditingSummary(true); }}>Edit</button>
+              <button className="btn" onClick={handleResetSummary}>Reset from source</button>
             </div>
           </>
+        )}
+      </section>
+
+      {/* ── Olfactive Descriptor Panel ── */}
+      <section className="card">
+        <div className="taxo-header" onClick={() => setTaxoOpen((o) => !o)} style={{ cursor: "pointer" }}>
+          <h2 style={{ margin: 0 }}>Olfactive descriptors <span style={{ fontSize: 12, opacity: 0.6 }}>(Osmo taxonomy)</span></h2>
+          <span style={{ fontSize: 18 }}>{taxoOpen ? "▲" : "▼"}</span>
+        </div>
+        {taxoOpen && (
+          <div className="taxo-body">
+            <input
+              className="taxo-search"
+              placeholder="Search descriptors…"
+              value={taxoSearch}
+              onChange={(e) => setTaxoSearch(e.target.value)}
+            />
+            {filteredFamilies.map((gf) => (
+              <div key={gf.name} className="taxo-family">
+                <div className="taxo-family-name" style={{ color: gf.color }}>{gf.name}</div>
+                <div className="taxo-chips">
+                  {gf.subfamilies.map((sf) => (
+                    <button
+                      key={sf}
+                      className="taxo-chip"
+                      style={{ borderColor: gf.color, color: gf.color }}
+                      onClick={() => appendDescriptor(sf)}
+                      title={`Add "${sf}" to notes`}
+                    >
+                      {sf}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {filteredSensations.length > 0 && (
+              <div className="taxo-family">
+                <div className="taxo-family-name" style={{ color: "#888" }}>Sensations &amp; Textures</div>
+                <div className="taxo-chips">
+                  {filteredSensations.map((s) => (
+                    <button
+                      key={s}
+                      className="taxo-chip"
+                      style={{ borderColor: "#888", color: "#888" }}
+                      onClick={() => appendDescriptor(s)}
+                      title={`Add "${s}" to notes`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </section>
 
       <section className="card">
         <h2>Notes</h2>
         <textarea
+          ref={notesRef}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="Optional observations (intensity score, character notes, anomalies)..."
+          placeholder="Type observations, or click descriptors above to append them…"
         />
+        {detectedDescriptors.length > 0 && (
+          <div className="detected-descriptors">
+            <span className="detected-label">Detected:</span>
+            {detectedDescriptors.map((d) => (
+              <span
+                key={d.term}
+                className="taxo-chip detected"
+                style={{ borderColor: d.color, color: d.color }}
+              >
+                {d.term}
+              </span>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="card">
@@ -493,15 +554,33 @@ export default function App() {
           <button className="btn" onClick={handleExport} disabled={records.length === 0}>
             Export CSV ({records.length})
           </button>
-          <button
-            className="btn danger"
-            onClick={handleClearRecords}
-            disabled={records.length === 0}
-          >
+          <button className="btn danger" onClick={handleClearRecords} disabled={records.length === 0}>
             Clear records
           </button>
         </div>
       </section>
+
+      {usageSummary.size > 0 && (
+        <section className="card">
+          <h2>Descriptor usage summary</h2>
+          <div className="taxo-chips">
+            {[...usageSummary.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([term, count]) => {
+                const meta = TERM_INDEX.get(term.toLowerCase());
+                return (
+                  <span
+                    key={term}
+                    className="taxo-chip detected"
+                    style={{ borderColor: meta?.color ?? "#888", color: meta?.color ?? "#888" }}
+                  >
+                    {term} <strong>×{count}</strong>
+                  </span>
+                );
+              })}
+          </div>
+        </section>
+      )}
 
       <section className="card">
         <h2>Recent evaluations</h2>
@@ -509,21 +588,35 @@ export default function App() {
           <div style={{ color: "var(--muted)", fontSize: 14 }}>No evaluations saved yet.</div>
         ) : (
           <div className="records">
-            {recentRecords.map((r) => (
-              <div className="record" key={r.evaluation_timestamp_iso + r.masked_code}>
-                <div className="top">
-                  <span>
-                    Booth <strong>{r.booth_number}</strong> · <strong>{r.masked_code}</strong>
-                  </span>
-                  <span className="meta">{new Date(r.evaluation_timestamp_iso).toLocaleString()}</span>
+            {recentRecords.map((r) => {
+              const recDescriptors = detectDescriptors(r.notes, TERM_INDEX);
+              return (
+                <div className="record" key={r.evaluation_timestamp_iso + r.masked_code}>
+                  <div className="top">
+                    <span>Booth <strong>{r.booth_number}</strong> · <strong>{r.masked_code}</strong></span>
+                    <span className="meta">{new Date(r.evaluation_timestamp_iso).toLocaleString()}</span>
+                  </div>
+                  <div className="meta">
+                    {r.project_id} / {r.application_id} · T {formatNumber(r.booth_temperature_c)} °C ·
+                    RH {formatNumber(r.booth_humidity_rh)}% · flow {formatNumber(r.booth_water_flow_lpm)} l/m
+                  </div>
+                  {r.notes && <div className="meta">Note: {r.notes}</div>}
+                  {recDescriptors.length > 0 && (
+                    <div className="detected-descriptors" style={{ marginTop: 4 }}>
+                      {recDescriptors.map((d) => (
+                        <span
+                          key={d.term}
+                          className="taxo-chip detected"
+                          style={{ borderColor: d.color, color: d.color, fontSize: 11 }}
+                        >
+                          {d.term}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="meta">
-                  {r.project_id} / {r.application_id} · T {formatNumber(r.booth_temperature_c)} °C ·
-                  RH {formatNumber(r.booth_humidity_rh)}% · flow {formatNumber(r.booth_water_flow_lpm)} l/m
-                </div>
-                {r.notes && <div className="meta">Note: {r.notes}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -537,8 +630,7 @@ function Metric({ label, value, unit }: { label: string; value: string; unit?: s
     <div className="metric">
       <div className="label">{label}</div>
       <div className={`value ${muted ? "muted" : ""}`}>
-        {value}
-        {!muted && unit ? ` ${unit}` : ""}
+        {value}{!muted && unit ? ` ${unit}` : ""}
       </div>
     </div>
   );
