@@ -1,0 +1,134 @@
+Fragrance Bloom Intensity Evaluation Protocol – Shampoo
+
+Date Issued: 5 Dec 2025
+Owner: UFH
+Location: Port Sunlight Research Lab
+
+1. OBJECTIVE
+Evaluate fragrance intensity and bloom (room-fill) performance of raw materials and finished fragrances in a standardised shampoo base. This protocol supports comparative assessment, scale-based evaluation, and determination of acceptable bloom levels.
+
+2. SCOPE
+Applies to internal trained sensory panels conducted in fragrance evaluation booths. Covers sample preparation, environmental setup, panel procedure, and data collection and analysis.
+
+3. PANEL SETUP
+
+Panel details:
+- Panel type: Trained internal sensory panel
+- Panel size: Minimum 10 panellists per assessment
+- Replicates: 3 per sample
+- Training: Passed olfactory screening and calibrated to scale anchors
+- Demographics: Mixed gender and age preferred
+
+Booth configuration (Port Sunlight reference):
+- Height: 2600 mm
+- Length: 1630 mm
+- Width: 980 mm
+- Shower head at far end of booth
+- Distance from shower head to sink bottom: 57 cm
+
+4. EVALUATION CONDITIONS (SHAMPOO)
+
+Environmental:
+- Location: Fragrance booth
+- Ambient temperature: 20–25 °C
+- Humidity: Not controlled; ~90% RH observed during shower use
+
+Water and equipment:
+- Water temperature: 35–40 °C
+- Flow rate: 4 L/min
+- Beaker: 1 litre
+- Sink/basin approx. dimensions:
+  - Depth: 300 mm
+  - Length: 300 mm
+  - Width: 400 mm
+
+Product application:
+- Product dose: 10 g shampoo (calibration sample may differ)
+- Shower running time: 1 minute
+- Incubation: 1 minute post-application
+- Evaluation distance: ~1630 mm (booth length)
+
+5. EVALUATION SCALE – BLOOM INTENSITY
+
+Scale definition:
+- Linear scale: 0–10
+- Increment: 0.5
+- 0 = No fragrance
+- 10 = Extremely strong fragrance
+
+Anchoring:
+- Reference: Intensity 5
+- Low control: 3
+- High control: 8
+- Controls provided:
+  - Full fragrance: 3, 5, 8
+  - Raw materials: 3 and 8
+
+6. EVALUATION PROCESS – SHAMPOO
+
+Materials required:
+- Shampoo sample (10 g ≈ 10 ml)
+- Warm water (20 g at 35–40 °C)
+- 1 L beaker
+- Timer
+- Disposable gloves
+
+Sample preparation:
+1. Mix 10 g shampoo with 20 g warm water in beaker
+2. Agitate to create foam (whisking motion)
+3. Cover with foil to prevent early fragrance release
+4. Equilibrate in evaluation room for 15 minutes
+5. Close booth door securely
+6. Run shower at 37 °C for 3 minutes to set humidity
+7. Label booth with randomised code
+
+Lathering procedure:
+1. Remove foil from beaker
+2. Plug sink
+3. Place beaker under shower head
+4. Run shower at 37 °C directly onto sample for 1 minute
+
+Bloom assessment:
+1. Wait 1 minute for booth saturation
+2. Panellist evaluates through booth window/opening
+3. Record bloom intensity using 0–10 scale
+
+7. OPERATIONAL NOTES
+- Minimum 1 hour ventilation between assessments in same booth
+- Use fresh gloves and clean bowl for each sample
+- Decontaminate with unfragranced antibacterial spray
+- Maintain consistent timing, water volume, and temperature
+- Panellists must not wear personal fragrance or fragranced products
+
+8. PANEL DESIGN GUIDANCE
+- Base formulation: Identical for all samples
+- Raw material dosage: Fixed
+- Labelling: Randomised 3-digit codes
+- Presentation order: Fully randomised per panellist
+
+9. DATA COLLECTION AND ANALYSIS
+
+Data capture:
+- Tool: Compusense or equivalent
+- Data: Intensity scores, bloom scores, rankings, liking scores
+
+Statistical analysis:
+- ANOVA (1-way or 2-factor)
+- Tukey HSD
+- Friedman test
+- Binomial test
+- Significance threshold: p < 0.05
+
+10. FRAGRANCE INTENSITY SCALE (REFERENCE)
+
+0  - No detectable fragrance
+1  - Extremely weak; barely perceptible
+2  - Very weak; faint
+3  - Weak; noticeable, no presence
+4  - Mild; limited diffusion
+5  - Moderate; balanced
+6  - Distinct; fills immediate area
+7  - Strong; fills the space
+8  - Very strong; dominates room
+9  - Extremely strong; overpowering
+10 - Maximum intensity; saturating
