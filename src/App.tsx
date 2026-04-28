@@ -21,7 +21,6 @@ import {
 } from "./lib/taxonomy";
 import type {
   ApplicationCodeRow,
-  BoothMetrics,
   EvaluationRecord,
   TelemetryRow
 } from "./lib/types";
@@ -29,40 +28,73 @@ import type {
 const RECORDS_KEY = "frag.records.v1";
 const SUMMARY_KEY = "frag.protocol.summary.v1";
 const BASE = import.meta.env.BASE_URL;
-
 const TERM_INDEX = buildTermIndex();
 
-function formatNumber(n: number | null, digits = 2): string {
-  if (n === null || isNaN(n)) return "—";
-  return n.toFixed(digits);
+type AppView = "landing" | "recording" | "review";
+
+function fmt(n: number | null, d = 2): string {
+  return n === null || isNaN(n) ? "—" : n.toFixed(d);
 }
 
 function loadRecords(): EvaluationRecord[] {
   try {
     const raw = localStorage.getItem(RECORDS_KEY);
     return raw ? (JSON.parse(raw) as EvaluationRecord[]) : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-function saveRecords(records: EvaluationRecord[]) {
-  localStorage.setItem(RECORDS_KEY, JSON.stringify(records));
+function saveRecords(r: EvaluationRecord[]) {
+  localStorage.setItem(RECORDS_KEY, JSON.stringify(r));
 }
+
+// ── SVG icons ──────────────────────────────────────────────────────────────
+
+function MicIcon({ size = 52, color = "currentColor" }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <rect x="9" y="2" width="6" height="11" rx="3" fill={color} />
+      <path d="M5 11a7 7 0 0014 0" stroke={color} strokeWidth="2" strokeLinecap="round" />
+      <line x1="12" y1="18" x2="12" y2="22" stroke={color} strokeWidth="2" strokeLinecap="round" />
+      <line x1="9" y1="22" x2="15" y2="22" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="#fff" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none"
+      style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}
+      aria-hidden
+    >
+      <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ── Root component ──────────────────────────────────────────────────────────
 
 export default function App() {
   const [codes, setCodes] = useState<ApplicationCodeRow[]>([]);
   const [telemetry, setTelemetry] = useState<TelemetryRow[]>([]);
   const [protocolText, setProtocolText] = useState("");
-  const [summary, setSummary] = useState<string>(
-    () => localStorage.getItem(SUMMARY_KEY) ?? ""
-  );
-  const [editingSummary, setEditingSummary] = useState(false);
-  const [draftSummary, setDraftSummary] = useState(summary);
+  const [summary, setSummary] = useState<string>(() => localStorage.getItem(SUMMARY_KEY) ?? "");
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [view, setView] = useState<AppView>("landing");
+  const [isManual, setIsManual] = useState(false);
 
   const [transcript, setTranscript] = useState("");
   const [interim, setInterim] = useState("");
-  const [listening, setListening] = useState(false);
+  const [, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   const [boothNumber, setBoothNumber] = useState<number | "">("");
@@ -72,12 +104,15 @@ export default function App() {
 
   const [records, setRecords] = useState<EvaluationRecord[]>(() => loadRecords());
   const [status, setStatus] = useState<{ kind: "info" | "ok" | "error"; msg: string } | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [showRecords, setShowRecords] = useState(false);
+  const [showProtocol, setShowProtocol] = useState(false);
+  const [showTaxo, setShowTaxo] = useState(false);
   const [taxoSearch, setTaxoSearch] = useState("");
-  const [taxoOpen, setTaxoOpen] = useState(false);
+  const [editingSummary, setEditingSummary] = useState(false);
+  const [draftSummary, setDraftSummary] = useState(summary);
 
-  // Initial data load
+  // Load data once
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -90,26 +125,22 @@ export default function App() {
         if (cancelled) return;
         setCodes(codesRows);
         setProtocolText(protoRes);
-        if (!summary) {
-          const generated = summariseProtocol(protoRes);
-          setSummary(generated);
-          setDraftSummary(generated);
-          localStorage.setItem(SUMMARY_KEY, generated);
-        }
         setTelemetry(parseTelemetryRows(telemetryRaw));
-      } catch (e) {
-        if (!cancelled) {
-          setLoadError(
-            e instanceof Error ? e.message : "Failed to load source data."
-          );
+        if (!summary) {
+          const gen = summariseProtocol(protoRes);
+          setSummary(gen);
+          setDraftSummary(gen);
+          localStorage.setItem(SUMMARY_KEY, gen);
         }
+      } catch (e) {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load data.");
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-parse from transcript whenever it changes
+  // Parse booth + code from live transcript
   useEffect(() => {
     const combined = `${transcript} ${interim}`.trim();
     if (!combined) return;
@@ -119,53 +150,36 @@ export default function App() {
     if (c) setMaskedCode(c);
   }, [transcript, interim]);
 
-  const resolved = useMemo(
-    () => resolveMaskedCode(maskedCode, codes),
-    [maskedCode, codes]
-  );
+  const resolved = useMemo(() => resolveMaskedCode(maskedCode, codes), [maskedCode, codes]);
 
-  const previewTelemetryRow: TelemetryRow | null = useMemo(() => {
-    if (telemetry.length === 0) return null;
+  const nearestRow = useMemo(() => {
+    if (!telemetry.length) return null;
     return findNearestTelemetryRow(telemetry, new Date().toISOString());
   }, [telemetry]);
 
-  const previewMetrics: BoothMetrics | null = useMemo(() => {
-    if (!previewTelemetryRow || boothNumber === "") return null;
-    return extractBoothMetrics(previewTelemetryRow, Number(boothNumber));
-  }, [previewTelemetryRow, boothNumber]);
+  const metrics = useMemo(() => {
+    if (!nearestRow || boothNumber === "") return null;
+    return extractBoothMetrics(nearestRow, Number(boothNumber));
+  }, [nearestRow, boothNumber]);
 
-  // Live detected descriptors from current notes
-  const detectedDescriptors: DetectedTerm[] = useMemo(
-    () => detectDescriptors(notes, TERM_INDEX),
-    [notes]
-  );
+  const detected: DetectedTerm[] = useMemo(() => detectDescriptors(notes, TERM_INDEX), [notes]);
 
-  // Descriptor usage summary across all saved records
-  const usageSummary: Map<string, number> = useMemo(() => {
-    const counts = new Map<string, number>();
+  const usageSummary = useMemo(() => {
+    const m = new Map<string, number>();
     for (const rec of records) {
-      for (const d of detectDescriptors(rec.notes, TERM_INDEX)) {
-        counts.set(d.term, (counts.get(d.term) ?? 0) + 1);
-      }
+      for (const d of detectDescriptors(rec.notes, TERM_INDEX))
+        m.set(d.term, (m.get(d.term) ?? 0) + 1);
     }
-    return counts;
+    return m;
   }, [records]);
 
-  function appendDescriptor(label: string) {
-    setNotes((prev) => {
-      const trimmed = prev.trimEnd();
-      return trimmed ? `${trimmed}, ${label}` : label;
-    });
-    notesRef.current?.focus();
-  }
+  // ── Speech ──────────────────────────────────────────────────────────────
 
-  function startListening() {
+  function startRecording() {
     const Ctor = getSpeechRecognition();
     if (!Ctor) {
-      setStatus({
-        kind: "error",
-        msg: "Voice input not supported on this browser. Use the manual fields below."
-      });
+      setIsManual(true);
+      setView("review");
       return;
     }
     try {
@@ -174,15 +188,14 @@ export default function App() {
       rec.interimResults = true;
       rec.lang = "en-GB";
       rec.onresult = (e) => {
-        let finalText = "";
-        let interimText = "";
+        let fin = ""; let itr = "";
         for (let i = e.resultIndex; i < e.results.length; i++) {
-          const res = e.results[i];
-          if (res.isFinal) finalText += res[0].transcript;
-          else interimText += res[0].transcript;
+          const r = e.results[i];
+          if (r.isFinal) fin += r[0].transcript;
+          else itr += r[0].transcript;
         }
-        if (finalText) setTranscript((prev) => (prev + " " + finalText).trim());
-        setInterim(interimText);
+        if (fin) setTranscript((p) => (p + " " + fin).trim());
+        setInterim(itr);
       };
       rec.onend = () => { setListening(false); setInterim(""); };
       rec.onerror = (ev) => {
@@ -192,28 +205,46 @@ export default function App() {
       rec.start();
       recognitionRef.current = rec;
       setListening(true);
-      setStatus({ kind: "info", msg: "Listening. Say booth number then 4-letter code." });
+      setTranscript("");
+      setInterim("");
+      setView("recording");
     } catch (e) {
-      setStatus({
-        kind: "error",
-        msg: e instanceof Error ? e.message : "Could not start voice input."
-      });
+      setStatus({ kind: "error", msg: e instanceof Error ? e.message : "Could not start voice." });
     }
   }
 
-  function stopListening() {
+  function stopRecordingAndReview() {
     recognitionRef.current?.stop();
     setListening(false);
+    setIsManual(false);
+    setView("review");
   }
 
-  function clearTranscript() {
+  function goToManual() {
+    setIsManual(true);
+    setBoothNumber("");
+    setMaskedCode("");
+    setNotes("");
     setTranscript("");
     setInterim("");
+    setView("review");
+  }
+
+  function goBack() {
+    recognitionRef.current?.stop();
+    setListening(false);
+    setView("landing");
+    setStatus(null);
+  }
+
+  function appendDescriptor(label: string) {
+    setNotes((p) => { const t = p.trimEnd(); return t ? `${t}, ${label}` : label; });
+    notesRef.current?.focus();
   }
 
   function handleSave() {
     if (boothNumber === "" || boothNumber < 1 || boothNumber > 8) {
-      setStatus({ kind: "error", msg: "Booth number must be 1 to 8." });
+      setStatus({ kind: "error", msg: "Booth number must be 1–8." });
       return;
     }
     if (!maskedCode || maskedCode.length !== 4) {
@@ -221,33 +252,27 @@ export default function App() {
       return;
     }
     if (!resolved) {
-      setStatus({
-        kind: "error",
-        msg: `Masked code "${maskedCode}" not found in mapping.`
-      });
+      setStatus({ kind: "error", msg: `Code "${maskedCode}" not found in mapping.` });
       return;
     }
     const evaluationIso = new Date().toISOString();
-    const nearest = findNearestTelemetryRow(telemetry, evaluationIso);
-    const metrics = extractBoothMetrics(nearest, Number(boothNumber));
+    const row = findNearestTelemetryRow(telemetry, evaluationIso);
+    const mx = extractBoothMetrics(row, Number(boothNumber));
     const record: EvaluationRecord = {
       evaluation_timestamp_iso: evaluationIso,
       booth_number: Number(boothNumber),
       masked_code: maskedCode,
       project_id: resolved["Project ID"],
       application_id: resolved["Application ID"],
-      effective_telemetry_timestamp_iso: nearest?.effective_timestamp_iso ?? null,
-      ...metrics,
+      effective_telemetry_timestamp_iso: row?.effective_timestamp_iso ?? null,
+      ...mx,
       notes,
       protocol_summary_snapshot: summary
     };
     const next = [record, ...records];
     setRecords(next);
     saveRecords(next);
-    setStatus({
-      kind: "ok",
-      msg: `Saved booth ${record.booth_number} / ${record.masked_code} → ${record.project_id} / ${record.application_id}.`
-    });
+    setStatus({ kind: "ok", msg: `Saved — Booth ${record.booth_number} · ${record.project_id} / ${record.application_id}` });
     setNotes("");
     setMaskedCode("");
     setTranscript("");
@@ -255,382 +280,439 @@ export default function App() {
   }
 
   function handleExport() {
-    if (records.length === 0) {
-      setStatus({ kind: "error", msg: "No records to export." });
-      return;
-    }
-    const csv = recordsToCsv(records);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    if (!records.length) { setStatus({ kind: "error", msg: "No records to export." }); return; }
+    const blob = new Blob([recordsToCsv(records)], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `evaluations_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }
 
-  function handleClearRecords() {
+  function handleClear() {
     if (!confirm("Delete all saved evaluations on this device?")) return;
-    setRecords([]);
-    saveRecords([]);
-    setStatus({ kind: "info", msg: "Local records cleared." });
-  }
-
-  function handleResetSummary() {
-    const generated = summariseProtocol(protocolText);
-    setSummary(generated);
-    setDraftSummary(generated);
-    localStorage.setItem(SUMMARY_KEY, generated);
-    setEditingSummary(false);
-    setStatus({ kind: "info", msg: "Protocol summary regenerated from source." });
+    setRecords([]); saveRecords([]);
+    setStatus({ kind: "info", msg: "Records cleared." });
   }
 
   function handleSaveSummary() {
     setSummary(draftSummary);
     localStorage.setItem(SUMMARY_KEY, draftSummary);
     setEditingSummary(false);
-    setStatus({ kind: "ok", msg: "Protocol summary updated." });
   }
 
-  const speechSupported = !!getSpeechRecognition();
-  const recentRecords = records.slice(0, 5);
+  function handleResetSummary() {
+    const gen = summariseProtocol(protocolText);
+    setSummary(gen); setDraftSummary(gen);
+    localStorage.setItem(SUMMARY_KEY, gen);
+    setEditingSummary(false);
+  }
 
-  // Filtered taxonomy terms for the descriptor panel
+  // Taxonomy filtering
   const taxoFilter = taxoSearch.toLowerCase().trim();
-  const filteredFamilies = GRAND_FAMILIES.map((gf) => ({
-    ...gf,
-    subfamilies: gf.subfamilies.filter(
-      (sf) => !taxoFilter || sf.toLowerCase().includes(taxoFilter) || gf.name.toLowerCase().includes(taxoFilter)
-    )
-  })).filter((gf) => gf.subfamilies.length > 0 || gf.name.toLowerCase().includes(taxoFilter));
+  const filteredFamilies = GRAND_FAMILIES
+    .map((gf) => ({
+      ...gf,
+      subfamilies: gf.subfamilies.filter(
+        (sf) => !taxoFilter || sf.toLowerCase().includes(taxoFilter) || gf.name.toLowerCase().includes(taxoFilter)
+      )
+    }))
+    .filter((gf) => gf.subfamilies.length > 0 || (!taxoFilter ? false : gf.name.toLowerCase().includes(taxoFilter)));
 
   const filteredSensations = SENSATIONS.filter(
     (s) => !taxoFilter || s.toLowerCase().includes(taxoFilter)
   );
 
-  return (
-    <div className="app">
-      <div className="header">
-        <h1>Fragrance Evaluation</h1>
-        <span className="chip">
-          {codes.length} codes · {telemetry.length} telemetry rows
-        </span>
-      </div>
+  // ── Screens ─────────────────────────────────────────────────────────────
 
-      {loadError && (
-        <div className="banner error">Could not load source data: {loadError}</div>
-      )}
+  if (view === "landing") {
+    return (
+      <div className="screen landing">
+        <span className="landing-brand">Fragrance Evaluation</span>
 
-      {status && <div className={`banner ${status.kind}`}>{status.msg}</div>}
-
-      <section className="card">
-        <h2>Voice input</h2>
-        <div className="mic-row">
+        <div className="landing-centre">
           <button
-            className={`mic-button ${listening ? "listening" : ""}`}
-            onClick={listening ? stopListening : startListening}
-            disabled={!speechSupported}
-            aria-pressed={listening}
+            className="mic-button-landing"
+            onClick={startRecording}
+            aria-label="Start voice recording"
           >
-            {listening ? "Stop" : speechSupported ? "Hold to talk" : "Voice unavailable"}
+            <MicIcon size={52} />
           </button>
-          <div className={`transcript ${transcript || interim ? "" : "empty"}`}>
+          <span className="landing-cta-label">Tap to begin</span>
+          {loadError && (
+            <div style={{ fontSize: 12, color: "#c53030", textAlign: "center", maxWidth: 280 }}>
+              {loadError}
+            </div>
+          )}
+        </div>
+
+        <button className="skip-btn" onClick={goToManual}>
+          Skip recording — enter manually
+        </button>
+      </div>
+    );
+  }
+
+  if (view === "recording") {
+    return (
+      <div className="screen recording-screen">
+        <div style={{ width: "100%", maxWidth: 460, textAlign: "center" }}>
+          <div className="recording-label">Recording</div>
+        </div>
+
+        <div className="recording-centre">
+          <div className="mic-pulse-wrapper">
+            <div className="pulse-ring" />
+            <div className="pulse-ring" />
+            <div className="pulse-ring" />
+            <button
+              className="mic-button-recording"
+              onClick={stopRecordingAndReview}
+              aria-label="Stop recording"
+            >
+              <StopIcon />
+            </button>
+          </div>
+
+          <div className={`transcript-box ${transcript || interim ? "" : "empty"}`}>
             {transcript || interim
               ? `${transcript}${interim ? " " + interim : ""}`
-              : "Press the mic and say the booth number followed by the 4-letter code."}
+              : "Say the booth number followed by the 4-letter code…"}
           </div>
-          <div className="chips">
-            <span className={`chip ${boothNumber !== "" ? "filled" : ""}`}>
-              Booth: {boothNumber === "" ? "—" : boothNumber}
+
+          <div className="parsed-chips-row">
+            <span className={`parsed-chip ${boothNumber !== "" ? "active" : ""}`}>
+              Booth {boothNumber !== "" ? boothNumber : "—"}
             </span>
-            <span className={`chip ${maskedCode.length === 4 ? "filled" : ""}`}>
-              Code: {maskedCode || "—"}
+            <span className={`parsed-chip ${maskedCode.length === 4 ? "active" : ""}`}>
+              {maskedCode.length === 4 ? maskedCode : "Code —"}
             </span>
-            {transcript && (
-              <button className="btn" onClick={clearTranscript}>
-                Clear transcript
-              </button>
-            )}
           </div>
         </div>
-      </section>
 
-      <section className="card">
-        <h2>Manual input</h2>
-        <div className="grid">
-          <div className="field">
-            <label htmlFor="booth">Booth number (1-8)</label>
-            <select
-              id="booth"
-              value={boothNumber}
-              onChange={(e) =>
-                setBoothNumber(e.target.value === "" ? "" : Number(e.target.value))
-              }
-            >
-              <option value="">Select</option>
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="code">Masked code (4 letters)</label>
-            <input
-              id="code"
-              maxLength={4}
-              value={maskedCode}
-              onChange={(e) =>
-                setMaskedCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))
-              }
-              placeholder="e.g. FABC"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-          </div>
-        </div>
-      </section>
+        <button className="done-btn" onClick={stopRecordingAndReview}>
+          Done — review fields
+        </button>
+      </div>
+    );
+  }
 
-      <section className="card">
-        <h2>Resolved IDs</h2>
-        {resolved ? (
-          <div>
-            <div className="kv-row">
-              <span className="k">Project ID</span>
-              <span className="v">{resolved["Project ID"]}</span>
-            </div>
-            <div className="kv-row">
-              <span className="k">Application ID</span>
-              <span className="v">{resolved["Application ID"]}</span>
-            </div>
-          </div>
-        ) : (
-          <div style={{ color: "var(--muted)", fontSize: 14 }}>
-            {maskedCode.length === 4
-              ? `Code "${maskedCode}" not found in mapping.`
-              : "Enter or speak a 4-letter code to resolve project and application IDs."}
-          </div>
-        )}
-      </section>
+  // ── Screen 3: Review / Manual entry ─────────────────────────────────────
+  return (
+    <div className="screen">
+      <div className="review-screen">
 
-      <section className="card">
-        <h2>Booth conditions</h2>
-        {boothNumber === "" || !previewTelemetryRow ? (
-          <div style={{ color: "var(--muted)", fontSize: 14 }}>
-            Select a booth to preview the latest telemetry snapshot.
-          </div>
-        ) : (
-          <>
-            <div className="timestamp-label">
-              Telemetry snapshot: {previewTelemetryRow.original_timestamp || previewTelemetryRow.effective_timestamp_iso}
-            </div>
-            <div className="metric-grid">
-              <Metric label="Temperature" value={formatNumber(previewMetrics?.booth_temperature_c ?? null)} unit="°C" />
-              <Metric label="Humidity" value={formatNumber(previewMetrics?.booth_humidity_rh ?? null)} unit="%RH" />
-              <Metric label="Water temp" value={formatNumber(previewMetrics?.booth_water_temp_c ?? null)} unit="°C" />
-              <Metric label="Water flow" value={formatNumber(previewMetrics?.booth_water_flow_lpm ?? null)} unit="l/m" />
-              <Metric label="Water source" value={previewMetrics?.booth_water_source ?? "—"} />
-              <Metric label="Air flow" value={previewMetrics?.booth_air_flow ?? "—"} />
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Protocol summary</h2>
-        {editingSummary ? (
-          <>
-            <textarea
-              value={draftSummary}
-              onChange={(e) => setDraftSummary(e.target.value)}
-            />
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button className="btn primary" onClick={handleSaveSummary}>Save summary</button>
-              <button className="btn" onClick={() => { setDraftSummary(summary); setEditingSummary(false); }}>Cancel</button>
-              <button className="btn" onClick={handleResetSummary}>Reset from source</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="protocol">{summary || "No summary yet."}</div>
-            <div className="actions" style={{ marginTop: 10 }}>
-              <button className="btn" onClick={() => { setDraftSummary(summary); setEditingSummary(true); }}>Edit</button>
-              <button className="btn" onClick={handleResetSummary}>Reset from source</button>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ── Olfactive Descriptor Panel ── */}
-      <section className="card">
-        <div className="taxo-header" onClick={() => setTaxoOpen((o) => !o)} style={{ cursor: "pointer" }}>
-          <h2 style={{ margin: 0 }}>Olfactive descriptors <span style={{ fontSize: 12, opacity: 0.6 }}>(Osmo taxonomy)</span></h2>
-          <span style={{ fontSize: 18 }}>{taxoOpen ? "▲" : "▼"}</span>
-        </div>
-        {taxoOpen && (
-          <div className="taxo-body">
-            <input
-              className="taxo-search"
-              placeholder="Search descriptors…"
-              value={taxoSearch}
-              onChange={(e) => setTaxoSearch(e.target.value)}
-            />
-            {filteredFamilies.map((gf) => (
-              <div key={gf.name} className="taxo-family">
-                <div className="taxo-family-name" style={{ color: gf.color }}>{gf.name}</div>
-                <div className="taxo-chips">
-                  {gf.subfamilies.map((sf) => (
-                    <button
-                      key={sf}
-                      className="taxo-chip"
-                      style={{ borderColor: gf.color, color: gf.color }}
-                      onClick={() => appendDescriptor(sf)}
-                      title={`Add "${sf}" to notes`}
-                    >
-                      {sf}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {filteredSensations.length > 0 && (
-              <div className="taxo-family">
-                <div className="taxo-family-name" style={{ color: "#888" }}>Sensations &amp; Textures</div>
-                <div className="taxo-chips">
-                  {filteredSensations.map((s) => (
-                    <button
-                      key={s}
-                      className="taxo-chip"
-                      style={{ borderColor: "#888", color: "#888" }}
-                      onClick={() => appendDescriptor(s)}
-                      title={`Add "${s}" to notes`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Notes</h2>
-        <textarea
-          ref={notesRef}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Type observations, or click descriptors above to append them…"
-        />
-        {detectedDescriptors.length > 0 && (
-          <div className="detected-descriptors">
-            <span className="detected-label">Detected:</span>
-            {detectedDescriptors.map((d) => (
-              <span
-                key={d.term}
-                className="taxo-chip detected"
-                style={{ borderColor: d.color, color: d.color }}
-              >
-                {d.term}
-              </span>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Save and export</h2>
-        <div className="actions">
+        <div className="review-topbar">
+          <button className="back-btn" onClick={goBack} aria-label="Back to start">
+            ← {isManual ? "Cancel" : "Back"}
+          </button>
+          <span className="topbar-title">{isManual ? "Manual Entry" : "Review"}</span>
           <button
-            className="btn primary"
+            className="records-toggle-btn"
+            onClick={() => setShowRecords((s) => !s)}
+          >
+            Records ({records.length})
+          </button>
+        </div>
+
+        {status && (
+          <div className={`status-banner ${status.kind}`}>{status.msg}</div>
+        )}
+
+        {/* ── Booth + Code ── */}
+        <div className="section">
+          <div className="section-label">Identification</div>
+          <div className="input-pair">
+            <div>
+              <div className="field-label">Booth</div>
+              <select
+                className={`field-input ${boothNumber !== "" ? "resolved" : ""}`}
+                value={boothNumber}
+                onChange={(e) => setBoothNumber(e.target.value === "" ? "" : Number(e.target.value))}
+              >
+                <option value="">—</option>
+                {[1,2,3,4,5,6,7,8].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="field-label">Code</div>
+              <input
+                className={`field-input ${maskedCode.length === 4 && resolved ? "resolved" : ""}`}
+                maxLength={4}
+                value={maskedCode}
+                onChange={(e) => setMaskedCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
+                placeholder="XXXX"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Resolved IDs ── */}
+        {maskedCode.length === 4 && (
+          <>
+            <div className="section-divider" />
+            <div className="section">
+              <div className="section-label">Project &amp; Application</div>
+              {resolved ? (
+                <>
+                  <div className="resolved-row">
+                    <span className="resolved-key">Project ID</span>
+                    <span className="resolved-val">{resolved["Project ID"]}</span>
+                  </div>
+                  <div className="resolved-row">
+                    <span className="resolved-key">Application ID</span>
+                    <span className="resolved-val">{resolved["Application ID"]}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="not-found-msg">"{maskedCode}" not found in mapping — check the code.</div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Booth conditions ── */}
+        <div className="section-divider" />
+        <div className="section">
+          <div className="section-label">Booth Conditions</div>
+          {boothNumber === "" || !nearestRow ? (
+            <div className="not-found-msg">Select a booth to load conditions.</div>
+          ) : (
+            <>
+              <div className="telemetry-ts">
+                Snapshot: {nearestRow.original_timestamp || nearestRow.effective_timestamp_iso}
+              </div>
+              <div className="metrics-row">
+                <MetricCard label="Temperature" value={fmt(metrics?.booth_temperature_c ?? null)} unit="°C" />
+                <MetricCard label="Humidity" value={fmt(metrics?.booth_humidity_rh ?? null)} unit="%RH" />
+                <MetricCard label="Water temp" value={fmt(metrics?.booth_water_temp_c ?? null)} unit="°C" />
+                <MetricCard label="Water flow" value={fmt(metrics?.booth_water_flow_lpm ?? null)} unit="l/m" />
+                <MetricCard label="Water source" value={metrics?.booth_water_source ?? "—"} />
+                <MetricCard label="Air flow" value={metrics?.booth_air_flow ?? "—"} />
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* ── Protocol summary ── */}
+        <div className="section-divider" />
+        <div className="section">
+          <div
+            className="collapsible-header"
+            onClick={() => setShowProtocol((s) => !s)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === "Enter" && setShowProtocol((s) => !s)}
+          >
+            <span className="section-label" style={{ marginBottom: 0 }}>Protocol Summary</span>
+            <ChevronIcon open={showProtocol} />
+          </div>
+          {showProtocol && (
+            <div style={{ marginTop: 12 }}>
+              {editingSummary ? (
+                <>
+                  <textarea
+                    className="notes-textarea"
+                    value={draftSummary}
+                    onChange={(e) => setDraftSummary(e.target.value)}
+                    style={{ minHeight: 120 }}
+                  />
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button className="ghost-btn" style={{ fontSize: 12 }} onClick={handleSaveSummary}>Save</button>
+                    <button className="ghost-btn" style={{ fontSize: 12 }} onClick={() => { setDraftSummary(summary); setEditingSummary(false); }}>Cancel</button>
+                    <button className="ghost-btn" style={{ fontSize: 12 }} onClick={handleResetSummary}>Reset</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="protocol-block">{summary || "No summary."}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button className="ghost-btn" style={{ fontSize: 12 }} onClick={() => { setDraftSummary(summary); setEditingSummary(true); }}>Edit</button>
+                    <button className="ghost-btn" style={{ fontSize: 12 }} onClick={handleResetSummary}>Reset</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Olfactive Descriptor Panel ── */}
+        <div className="section-divider" />
+        <div className="section">
+          <div
+            className="collapsible-header"
+            onClick={() => setShowTaxo((s) => !s)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === "Enter" && setShowTaxo((s) => !s)}
+          >
+            <div>
+              <span className="section-label" style={{ marginBottom: 0 }}>Olfactive Descriptors</span>
+              <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 8, letterSpacing: "0.04em" }}>Osmo taxonomy</span>
+            </div>
+            <ChevronIcon open={showTaxo} />
+          </div>
+          {showTaxo && (
+            <div style={{ marginTop: 12 }}>
+              <input
+                className="taxo-search-input"
+                placeholder="Search descriptors…"
+                value={taxoSearch}
+                onChange={(e) => setTaxoSearch(e.target.value)}
+              />
+              {filteredFamilies.map((gf) => (
+                <div key={gf.name} className="taxo-family-group">
+                  <div className="taxo-family-label" style={{ color: gf.color }}>{gf.name}</div>
+                  <div className="taxo-chips-wrap">
+                    {gf.subfamilies.map((sf) => (
+                      <button
+                        key={sf}
+                        className="taxo-chip-btn"
+                        style={{ color: gf.color }}
+                        onClick={() => appendDescriptor(sf)}
+                      >{sf}</button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {filteredSensations.length > 0 && (
+                <div className="taxo-family-group">
+                  <div className="taxo-family-label" style={{ color: "#888" }}>Sensations &amp; Textures</div>
+                  <div className="taxo-chips-wrap">
+                    {filteredSensations.map((s) => (
+                      <button
+                        key={s}
+                        className="taxo-chip-btn"
+                        style={{ color: "#888" }}
+                        onClick={() => appendDescriptor(s)}
+                      >{s}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Notes ── */}
+        <div className="section-divider" />
+        <div className="section">
+          <div className="section-label">Notes</div>
+          <textarea
+            ref={notesRef}
+            className="notes-textarea"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Type observations, or tap descriptors above to append them…"
+          />
+          {detected.length > 0 && (
+            <div className="detected-bar">
+              <span className="detected-bar-label">Detected:</span>
+              {detected.map((d) => (
+                <span key={d.term} className="detected-chip" style={{ color: d.color }}>{d.term}</span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── Save & export ── */}
+        <div className="section-divider" />
+        <div className="section">
+          <button
+            className="save-btn"
             onClick={handleSave}
             disabled={boothNumber === "" || maskedCode.length !== 4 || !resolved}
           >
-            Save evaluation
+            Save Evaluation
           </button>
-          <button className="btn" onClick={handleExport} disabled={records.length === 0}>
-            Export CSV ({records.length})
-          </button>
-          <button className="btn danger" onClick={handleClearRecords} disabled={records.length === 0}>
-            Clear records
-          </button>
+          <div className="secondary-actions">
+            <button className="ghost-btn" onClick={handleExport} disabled={!records.length}>
+              Export CSV
+            </button>
+            <button className="ghost-btn danger" onClick={handleClear} disabled={!records.length}>
+              Clear Records
+            </button>
+          </div>
         </div>
-      </section>
 
-      {usageSummary.size > 0 && (
-        <section className="card">
-          <h2>Descriptor usage summary</h2>
-          <div className="taxo-chips">
-            {[...usageSummary.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .map(([term, count]) => {
-                const meta = TERM_INDEX.get(term.toLowerCase());
-                return (
-                  <span
-                    key={term}
-                    className="taxo-chip detected"
-                    style={{ borderColor: meta?.color ?? "#888", color: meta?.color ?? "#888" }}
-                  >
-                    {term} <strong>×{count}</strong>
-                  </span>
-                );
-              })}
-          </div>
-        </section>
-      )}
-
-      <section className="card">
-        <h2>Recent evaluations</h2>
-        {recentRecords.length === 0 ? (
-          <div style={{ color: "var(--muted)", fontSize: 14 }}>No evaluations saved yet.</div>
-        ) : (
-          <div className="records">
-            {recentRecords.map((r) => {
-              const recDescriptors = detectDescriptors(r.notes, TERM_INDEX);
-              return (
-                <div className="record" key={r.evaluation_timestamp_iso + r.masked_code}>
-                  <div className="top">
-                    <span>Booth <strong>{r.booth_number}</strong> · <strong>{r.masked_code}</strong></span>
-                    <span className="meta">{new Date(r.evaluation_timestamp_iso).toLocaleString()}</span>
-                  </div>
-                  <div className="meta">
-                    {r.project_id} / {r.application_id} · T {formatNumber(r.booth_temperature_c)} °C ·
-                    RH {formatNumber(r.booth_humidity_rh)}% · flow {formatNumber(r.booth_water_flow_lpm)} l/m
-                  </div>
-                  {r.notes && <div className="meta">Note: {r.notes}</div>}
-                  {recDescriptors.length > 0 && (
-                    <div className="detected-descriptors" style={{ marginTop: 4 }}>
-                      {recDescriptors.map((d) => (
-                        <span
-                          key={d.term}
-                          className="taxo-chip detected"
-                          style={{ borderColor: d.color, color: d.color, fontSize: 11 }}
-                        >
-                          {d.term}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+        {/* ── Descriptor usage summary ── */}
+        {usageSummary.size > 0 && (
+          <>
+            <div className="section-divider" />
+            <div className="section">
+              <div className="section-label">Descriptor Usage</div>
+              <div className="usage-chips">
+                {[...usageSummary.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([term, count]) => {
+                    const meta = TERM_INDEX.get(term.toLowerCase());
+                    return (
+                      <span key={term} className="detected-chip" style={{ color: meta?.color ?? "#888" }}>
+                        {term} <strong>×{count}</strong>
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          </>
         )}
-      </section>
+
+        {/* ── Records drawer ── */}
+        {showRecords && (
+          <>
+            <div className="section-divider" />
+            <div className="section">
+              <div className="section-label">Recent Evaluations</div>
+              {records.length === 0 ? (
+                <div className="not-found-msg">No evaluations saved yet.</div>
+              ) : (
+                records.slice(0, 8).map((r) => {
+                  const rDets = detectDescriptors(r.notes, TERM_INDEX);
+                  return (
+                    <div className="record-item" key={r.evaluation_timestamp_iso + r.masked_code}>
+                      <div className="record-item-top">
+                        <span className="record-item-ids">
+                          Booth {r.booth_number} · {r.masked_code}
+                        </span>
+                        <span className="record-item-time">
+                          {new Date(r.evaluation_timestamp_iso).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="record-item-meta">
+                        {r.project_id} / {r.application_id} · {fmt(r.booth_temperature_c)} °C · RH {fmt(r.booth_humidity_rh)}%
+                      </div>
+                      {r.notes && <div className="record-item-meta" style={{ marginBottom: 4 }}>{r.notes}</div>}
+                      {rDets.length > 0 && (
+                        <div className="detected-bar">
+                          {rDets.map((d) => (
+                            <span key={d.term} className="detected-chip" style={{ color: d.color, fontSize: 10 }}>{d.term}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
+
+      </div>
     </div>
   );
 }
 
-function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function MetricCard({ label, value, unit }: { label: string; value: string; unit?: string }) {
   const muted = value === "—";
   return (
-    <div className="metric">
-      <div className="label">{label}</div>
-      <div className={`value ${muted ? "muted" : ""}`}>
-        {value}{!muted && unit ? ` ${unit}` : ""}
+    <div className="metric-card">
+      <div className="m-label">{label}</div>
+      <div className={`m-value ${muted ? "muted" : ""}`}>
+        {value}{!muted && unit ? <span style={{ fontSize: "0.65em", fontWeight: 500, marginLeft: 2 }}>{unit}</span> : ""}
       </div>
     </div>
   );
