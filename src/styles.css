@@ -593,3 +593,63 @@ button, input, textarea, select {
   .mic-button-recording { width: 120px; height: 120px; }
   .pulse-ring { width: 120px; height: 120px; }
 }
+
+/* ── Session draft cards ── */
+.session-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 14px 12px;
+  margin-bottom: 10px;
+  transition: border-color 0.2s;
+}
+
+.session-card.resolved {
+  border-color: var(--teal-mid);
+}
+
+.session-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.booth-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--navy-15);
+  color: var(--navy);
+  font-size: 15px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
+.session-code-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text);
+  transition: border-color 0.15s;
+}
+
+.session-code-input:focus {
+  outline: none;
+  border-color: var(--pink);
+}
+
+.session-code-input.resolved {
+  border-color: var(--teal-mid);
+  color: var(--teal);
+  background: var(--teal-15);
+}
